@@ -1,0 +1,64 @@
+node {
+
+    stage('latest-provider-check') {
+        def latestVersionResponse = httpRequest url: 'http://broker_app/pacticipants/user_service/latest-version/'
+        def versionResponseJson = readJSON text: latestVersionResponse.content
+        def latestReleasedVersion = versionResponseJson.number
+
+        sh 'rm -rf user-service-latest-released-version'
+        dir('user-service-latest-released-version') {
+            checkout([$class: 'GitSCM', branches: [[name: "refs/tags/user-service-${latestReleasedVersion}"]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'LocalBranch', localBranch: 'latest-user-service']], submoduleCfg: [], userRemoteConfigs: [[url: 'git@github.com:prashant-ee/user-service.git']]])
+
+            // run cdc tests
+            def testResult = sh returnStatus: true, script: "mvn clean install -Dpact.provider.version=${latestReleasedVersion}"
+            if(testResult == 1) {
+                currentBuild.result = 'FAILURE'
+            }
+        }
+    }
+
+    stage('dev-provider-check') {
+        def devVersionResponse = httpRequest url: 'http://broker_app/pacticipants/user_service/latest-version/DEV'
+        def versionResponseJson = readJSON text: devVersionResponse.content
+        def devDeployedVersion = versionResponseJson.number
+
+        sh 'rm -rf user-service-dev-deployed-version'
+        dir('user-service-dev-deployed-version') {
+            checkout([$class: 'GitSCM', branches: [[name: "refs/tags/user-service-${devDeployedVersion}"]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'LocalBranch', localBranch: 'dev-user-service']], submoduleCfg: [], userRemoteConfigs: [[url: 'git@github.com:prashant-ee/user-service.git']]])
+
+            // run cdc tests
+            def testResult = sh returnStatus: true, script: "mvn clean install -Dpact.provider.version=${devDeployedVersion}"
+            if(testResult == 1) {
+                currentBuild.result = 'FAILURE'
+            }
+        }
+    }
+
+    stage('prod-provider-check') {
+        def prodVersionResponse = httpRequest url: 'http://broker_app/pacticipants/user_service/latest-version/PROD'
+        def versionResponseJson = readJSON text: prodVersionResponse.content
+        def prodDeployedVersion = versionResponseJson.number
+
+        sh 'rm -rf user-service-prod-deployed-version'
+        dir('user-service-prod-deployed-version') {
+            checkout([$class: 'GitSCM', branches: [[name: "refs/tags/user-service-${prodDeployedVersion}"]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'LocalBranch', localBranch: 'prod-user-service']], submoduleCfg: [], userRemoteConfigs: [[url: 'git@github.com:prashant-ee/user-service.git']]])
+
+            // run cdc tests
+            def testResult = sh returnStatus: true, script: "mvn clean install -Dpact.provider.version=${prodDeployedVersion}"
+            if(testResult == 1) {
+                currentBuild.result = 'FAILURE'
+            }
+        }
+    }
+
+    // need a better strategy for post build notifications - may be declarative pipeline.
+    stage("slack notification") {
+        if(currentBuild.result == "FAILURE") {
+            slackSend (color: '#E01563', message: "FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})", channel: '#order-service-team')
+        } else if(currentBuild.result == "UNSTABLE") {
+            slackSend (color: '#E01563', message: "UNSTABLE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})", channel: '#order-service-team')
+        } else if(currentBuild.getPreviousBuild() != null && (currentBuild.getPreviousBuild().result == 'FAILURE' || currentBuild.getPreviousBuild().result == 'UNSTABLE')) {
+            slackSend (color: '#3EB991', message: "BACK TO NORMAL: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' (${env.BUILD_URL})", channel: '#order-service-team')
+        }
+    }
+}
